@@ -7,6 +7,7 @@ setup(
     install_requires=[
         'pandas==2.2.3',
         'numpy==1.26.4',
+        'arch',
     ],
     py_modules=['bitcoin_analysis'],
 ) 
