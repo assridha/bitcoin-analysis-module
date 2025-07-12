@@ -105,14 +105,72 @@ class BitcoinAnalysis:
         price_df = self.price_df
         priceLB = calculate_power_law_price(price_df['TimeDays'], COEFFICIENTS['2p5'])
         priceUB = calculate_power_law_price(price_df['TimeDays'], COEFFICIENTS['97p5'])
+        priceMedian = calculate_power_law_price(price_df['TimeDays'], COEFFICIENTS['median'])
         priceLB.index = price_df.index
         priceUB.index = price_df.index
-        quantile_index = (price_df['Close'] - priceLB) / (priceUB - priceLB)
+        priceMedian.index = price_df.index
+        
+        # Calculate quantile index using piecewise interpolation with extrapolation
+        quantile_index = self._interpolate_quantile_index(
+            price_df['Close'], priceLB, priceMedian, priceUB
+        )
+        
         quantile_index_df = pd.DataFrame({
             'time': ((price_df.index - datetime(1970, 1, 1)) / timedelta(milliseconds=1)).astype(int),
             'value': quantile_index
         })
         return quantile_index_df.dropna()
+    
+    def _interpolate_quantile_index(self, current_price, priceLB, priceMedian, priceUB):
+        """
+        Interpolate quantile index using piecewise linear interpolation between
+        priceLB (2.5%), priceMedian (50%), and priceUB (97.5%) with extrapolation.
+        
+        Returns quantile index where:
+        - 0.025 corresponds to priceLB
+        - 0.5 corresponds to priceMedian  
+        - 0.975 corresponds to priceUB
+        - Values below priceLB are extrapolated (can go negative)
+        - Values above priceUB are extrapolated (can exceed 1.0)
+        """
+        quantile_index = np.zeros_like(current_price, dtype=float)
+        
+        # Define quantile levels
+        q_lb = 0.025
+        q_median = 0.5
+        q_ub = 0.975
+        
+        # Case 1: Price below priceLB (extrapolate downward)
+        below_lb = current_price < priceLB
+        if np.any(below_lb):
+            # Linear extrapolation using slope between LB and median
+            slope_lower = (q_median - q_lb) / (priceMedian[below_lb] - priceLB[below_lb])
+            quantile_index[below_lb] = q_lb + slope_lower * (current_price[below_lb] - priceLB[below_lb])
+        
+        # Case 2: Price between priceLB and priceMedian
+        between_lb_median = (current_price >= priceLB) & (current_price <= priceMedian)
+        if np.any(between_lb_median):
+            # Linear interpolation between LB and median
+            weight = (current_price[between_lb_median] - priceLB[between_lb_median]) / \
+                    (priceMedian[between_lb_median] - priceLB[between_lb_median])
+            quantile_index[between_lb_median] = q_lb + weight * (q_median - q_lb)
+        
+        # Case 3: Price between priceMedian and priceUB
+        between_median_ub = (current_price > priceMedian) & (current_price <= priceUB)
+        if np.any(between_median_ub):
+            # Linear interpolation between median and UB
+            weight = (current_price[between_median_ub] - priceMedian[between_median_ub]) / \
+                    (priceUB[between_median_ub] - priceMedian[between_median_ub])
+            quantile_index[between_median_ub] = q_median + weight * (q_ub - q_median)
+        
+        # Case 4: Price above priceUB (extrapolate upward)
+        above_ub = current_price > priceUB
+        if np.any(above_ub):
+            # Linear extrapolation using slope between median and UB
+            slope_upper = (q_ub - q_median) / (priceUB[above_ub] - priceMedian[above_ub])
+            quantile_index[above_ub] = q_ub + slope_upper * (current_price[above_ub] - priceUB[above_ub])
+        
+        return quantile_index
 
 def calculate_quantile_prices(coefficients):
     t0 = pd.to_datetime('2009-01-03')
