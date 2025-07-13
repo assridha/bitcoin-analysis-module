@@ -2,3 +2,4 @@ test_code.ipynb
 dist/
 build/
 bitcoin_analysis.egg-info/
+__pycache__/
